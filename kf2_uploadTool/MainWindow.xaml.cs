@@ -15,6 +15,8 @@ using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
 using FluentFTP;
+using System.Collections;
+using System.Threading;
 
 namespace kf2_uploadTool
 {
@@ -24,6 +26,7 @@ namespace kf2_uploadTool
     public partial class MainWindow : Window
     {
         private Helper.config configuration;
+        private List<Helper.maps> files;
 
         public MainWindow()
         {
@@ -51,13 +54,86 @@ namespace kf2_uploadTool
             }
         }
 
-        private void uploadToRedirect()
+        private void uploadMaps(IProgress<double> progress)
         {
-            string filePath = configuration.redirect.path + "test.kfm"; //for testing
+            string remoteServerPath = String.Empty;
+            string remoteRedirectPath = String.Empty;
 
-            FtpClient ftpClient = new FtpClient(configuration.redirect.address, configuration.redirect.port, configuration.redirect.username, configuration.redirect.password);
-            ftpClient.Connect();
-            ftpClient.UploadFile(tb_MapPath.Text, filePath, FtpExists.Overwrite);
+            FtpClient ftpClientRedirect = new FtpClient(configuration.redirect.address, configuration.redirect.port, configuration.redirect.username, configuration.redirect.password);
+            ftpClientRedirect.Connect();
+
+            int fileCount = files.Count;
+
+            for (int i = 0; i < fileCount; i++)
+            {
+                Dispatcher.Invoke(new Action(() => lbl_fileProgress.Content = "Redirect map " + (i + 1) + " of " + fileCount + ": " + files[i].name));
+                remoteRedirectPath = configuration.redirect.path + files[i].name;
+                ftpClientRedirect.UploadFile(files[i].path, remoteRedirectPath, FtpExists.Overwrite, false, FtpVerify.None, progress);
+                Dispatcher.Invoke(new Action(() => pb_complete.Value++));
+            }
+
+            ftpClientRedirect.Disconnect();
+            
+            FtpClient ftpClientServer = new FtpClient(configuration.server.address, configuration.server.port, configuration.server.username, configuration.server.password);
+            ftpClientServer.Connect();
+
+            for (int i = 0; i < fileCount; i++)
+            {
+                Dispatcher.Invoke(new Action(() => lbl_fileProgress.Content = "Server map " + (i + 1) + " of " + fileCount + ": " + files[i].name));
+                remoteServerPath = configuration.server.path + "BrewedPC/Maps/" + files[i].name;
+                ftpClientServer.UploadFile(files[i].path, remoteServerPath, FtpExists.Overwrite, false, FtpVerify.None, progress);
+                Dispatcher.Invoke(new Action(() => pb_complete.Value++));
+            }
+
+            ftpClientServer.Disconnect();
+        }
+
+        private void btn_browseMap_Click(object sender, RoutedEventArgs e)
+        {
+            Microsoft.Win32.OpenFileDialog browseDialog = new Microsoft.Win32.OpenFileDialog();
+
+            browseDialog.DefaultExt = ".kfm";
+            browseDialog.Filter = "KF2 Maps|*.kfm";
+            browseDialog.Multiselect = true;
+            
+            Nullable<bool> result = browseDialog.ShowDialog();
+            
+            if (result == true)
+            {
+                files = new List<Helper.maps>();
+
+                for (int i = 0; i < browseDialog.FileNames.Length; i++)
+                {
+                    files.Add(new Helper.maps(browseDialog.FileNames[i], browseDialog.SafeFileNames[i]));
+                    lb_files.Items.Clear();
+                    lb_files.Items.Add(browseDialog.FileNames[i]);
+                }
+            }
+        }
+
+        private async void btn_start_Click(object sender, RoutedEventArgs e)
+        {
+            pb_file.Maximum = 100;
+            pb_file.Minimum = 0;
+
+            pb_complete.Maximum = (files.Count * 2); //TODO: Adding one after INI editing works
+            pb_complete.Minimum = 0;
+
+            var progressFile = new Progress<double>(percent =>
+            {
+                pb_file.Value = percent;
+            });
+
+            btn_start.IsEnabled = false;
+            btn_browseMap.IsEnabled = false;
+            menu_topBar.IsEnabled = false;
+
+            // DoProcessing is run on the thread pool.
+            await Task.Run(() => uploadMaps(progressFile));
+
+            btn_start.IsEnabled = true;
+            btn_browseMap.IsEnabled = true;
+            menu_topBar.IsEnabled = true;
         }
     }
 }
